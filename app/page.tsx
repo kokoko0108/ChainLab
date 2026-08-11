@@ -1,15 +1,17 @@
 "use client";
 
 /**
- * Main page — composes the wallet UI.
+ * Admin-style dashboard — single entry point for all wallet functions.
  *
- * Layout logic:
- * - When NOT connected, we show a hero with the Connect Wallet button.
- * - When connected, we show the account card (WalletInfo), the
- *   NetworkSwitcher, and a Disconnect button (inside WalletButton).
+ * Layout:
+ * - A persistent sidebar (left on desktop, top scroll-bar on mobile) lets the
+ *   user navigate between sections: Overview, Send, Networks, Tokens.
+ * - A topbar shows the app brand + live connection status / connect button.
+ * - The main area renders the active section, reusing the existing feature
+ *   components (Portfolio, SendToken, ReceiveToken, NetworkSwitcher, …).
  *
- * `useAccount()` drives which view is shown. The `mounted` guard prevents a
- * hydration mismatch, since wallet connection state only exists in the browser.
+ * Section state is local (no routing) so switching is instant. `mounted` guards
+ * against hydration mismatch since wallet state is browser-only.
  */
 
 import { useEffect, useState } from "react";
@@ -17,138 +19,174 @@ import { useAccount } from "wagmi";
 import { WalletButton } from "@/components/WalletButton";
 import { WalletInfo } from "@/components/WalletInfo";
 import { NetworkSwitcher } from "@/components/NetworkSwitcher";
-import { SendETH } from "@/components/SendETH";
+import { SendToken } from "@/components/SendToken";
+import { ReceiveToken } from "@/components/ReceiveToken";
+import { Portfolio } from "@/components/Portfolio";
+import { AllNetworksPortfolio } from "@/components/AllNetworksPortfolio";
+import { TokenBalances } from "@/components/TokenBalances";
+import { Sidebar, NAV_ITEMS, type SectionId } from "@/components/admin/Sidebar";
+import { Panel } from "@/components/admin/Panel";
+import { ConnectPrompt } from "@/components/admin/ConnectPrompt";
+import { getChainMeta } from "@/lib/chainMeta";
 
-export default function Home() {
-  const { isConnected } = useAccount();
+export default function Dashboard() {
+  const { isConnected, chain } = useAccount();
+  const [active, setActive] = useState<SectionId>("overview");
+  // Portfolio scope: just the active chain, or aggregated across all networks.
+  const [portfolioScope, setPortfolioScope] = useState<"current" | "all">("all");
 
-  // Avoid rendering connection-dependent UI until after hydration.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
+  const meta = getChainMeta(chain?.id);
+  const activeItem = NAV_ITEMS.find((i) => i.id === active)!;
+
+  // For wallet-dependent sections, show the connect prompt when disconnected.
+  const needsConnect =
+    mounted && activeItem.requiresWallet && !isConnected;
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12">
-      {/* Layered background: a faint on-chain grid + a soft radial glow that
-          together read as "blockchain network" without being noisy. */}
+    <main className="relative min-h-screen bg-background">
+      {/* Layered background. */}
       <div
         aria-hidden
-        className="pointer-events-none fixed inset-0 bg-[linear-gradient(rgba(124,92,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(124,92,255,0.04)_1px,transparent_1px)] bg-[size:44px_44px] [mask-image:radial-gradient(70%_60%_at_50%_0%,black,transparent)]"
+        className="pointer-events-none fixed inset-0 bg-[linear-gradient(rgba(124,92,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(124,92,255,0.04)_1px,transparent_1px)] bg-[size:44px_44px] [mask-image:radial-gradient(80%_60%_at_50%_0%,black,transparent)]"
       />
       <div
         aria-hidden
-        className="pointer-events-none fixed inset-0 bg-[radial-gradient(55%_45%_at_50%_-5%,rgba(124,92,255,0.18),transparent_70%)]"
+        className="pointer-events-none fixed inset-0 bg-[radial-gradient(50%_40%_at_50%_-5%,rgba(124,92,255,0.16),transparent_70%)]"
       />
 
-      {/* Container width adapts to state: a focused column when disconnected,
-          a wide dashboard when connected so everything fits without scrolling. */}
-      <div
-        className={`relative z-10 w-full transition-[max-width] duration-300 ${
-          mounted && isConnected ? "max-w-3xl" : "max-w-md"
-        }`}
-      >
-        {/* Compact header. When connected it becomes a top bar: brand on the
-            left, disconnect on the right. */}
-        {mounted && isConnected ? (
-          <header className="mb-5 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-accent-blue to-accent shadow-lg shadow-accent/30">
-                <svg
-                  className="h-5 w-5 text-white"
-                  viewBox="0 0 24 24"
-                  fill="currentColor"
-                  aria-hidden="true"
-                >
-                  <path d="M12 2 5.5 12.3 12 16l6.5-3.7L12 2Z" opacity="0.95" />
-                  <path d="M12 17.2 5.5 13.5 12 22l6.5-8.5L12 17.2Z" opacity="0.6" />
-                </svg>
-              </div>
-              <h1 className="text-lg font-bold tracking-tight text-white">
-                Web3 Wallet
-              </h1>
-            </div>
-            <WalletButton />
-          </header>
-        ) : (
-          <header className="mb-8 flex flex-col items-center text-center">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-accent-blue to-accent shadow-lg shadow-accent/30">
-              <svg
-                className="h-6 w-6 text-white"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                aria-hidden="true"
-              >
+      <div className="relative z-10 mx-auto flex min-h-screen max-w-6xl flex-col px-4 py-6 md:flex-row md:gap-6 md:py-8">
+        {/* ---- Sidebar ---- */}
+        <aside className="mb-4 md:mb-0 md:w-64 md:shrink-0">
+          {/* Brand */}
+          <div className="mb-6 flex items-center gap-3 px-1">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-accent-blue to-accent shadow-lg shadow-accent/30">
+              <svg className="h-5 w-5 text-white" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M12 2 5.5 12.3 12 16l6.5-3.7L12 2Z" opacity="0.95" />
                 <path d="M12 17.2 5.5 13.5 12 22l6.5-8.5L12 17.2Z" opacity="0.6" />
               </svg>
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">
-              Web3 Wallet
-            </h1>
-            <p className="mt-1.5 text-sm text-white/50">
-              Connect, view balances, and switch across 6 networks.
-            </p>
-          </header>
-        )}
-
-        {/* Main card */}
-        <div className="rounded-2xl border border-border bg-card/80 p-6 shadow-2xl shadow-black/40 backdrop-blur">
-          {!mounted ? (
-            // Placeholder during hydration to keep layout stable.
-            <div className="flex h-40 items-center justify-center">
-              <div className="h-6 w-6 animate-pulse rounded-full bg-accent/40" />
+            <div>
+              <p className="text-sm font-bold leading-tight text-white">
+                Web3 Wallet
+              </p>
+              <p className="text-[11px] text-white/40">Dashboard</p>
             </div>
-          ) : !isConnected ? (
-            // ---- INITIAL STATE ----
-            <div className="flex flex-col items-center gap-6 py-6 text-center">
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent/10 ring-1 ring-accent/30">
-                {/* Wallet icon */}
-                <svg
-                  className="h-8 w-8 text-accent"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
+          </div>
+
+          <Sidebar active={active} onSelect={setActive} />
+        </aside>
+
+        {/* ---- Main content ---- */}
+        <div className="flex-1">
+          {/* Topbar: section title + connection status. */}
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <div>
+              <h1 className="text-xl font-bold tracking-tight text-white">
+                {activeItem.label}
+              </h1>
+              <p className="text-sm text-white/40">{activeItem.description}</p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {/* Live connection chip. */}
+              {mounted && isConnected && (
+                <span
+                  className="hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium sm:inline-flex"
+                  style={{ color: meta.color, backgroundColor: `${meta.color}1f` }}
                 >
-                  <path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-2" />
-                  <path d="M3 5v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2H6a3 3 0 0 1-3-3" />
-                  <circle cx="16" cy="13" r="1" />
-                </svg>
-              </div>
-              <div className="space-y-1">
-                <p className="text-base font-semibold text-white">
-                  No wallet connected
-                </p>
-                <p className="text-sm text-white/50">
-                  Connect a wallet to view balances and switch networks.
-                </p>
-              </div>
+                  <meta.Icon className="h-3.5 w-3.5" />
+                  {meta.label}
+                </span>
+              )}
               <WalletButton />
             </div>
-          ) : (
-            // ---- CONNECTED STATE ----
-            // Two-column dashboard on >=sm: account/balance on the left,
-            // networks on the right. Stacks to one column on mobile.
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 sm:divide-x sm:divide-border">
-              <div className="sm:pr-6">
-                <WalletInfo />
-              </div>
-              <div className="space-y-6 sm:pl-6">
-                <NetworkSwitcher />
-                <div className="border-t border-border pt-6">
-                  <SendETH />
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+          </div>
 
-        {/* Footer */}
-        <p className="mt-6 text-center text-xs text-white/30">
-          Built with Next.js · wagmi v2 · viem · RainbowKit
-        </p>
+          {/* Section body. */}
+          {!mounted ? (
+            <div className="flex h-48 items-center justify-center rounded-2xl border border-border bg-card/80">
+              <div className="h-6 w-6 animate-pulse rounded-full bg-accent/40" />
+            </div>
+          ) : needsConnect ? (
+            <Panel title={activeItem.label} subtitle={activeItem.description}>
+              <ConnectPrompt feature={activeItem.description.toLowerCase()} />
+            </Panel>
+          ) : active === "overview" ? (
+            <div className="space-y-4">
+              <Panel title="Account" subtitle="Your wallet at a glance">
+                <WalletInfo />
+              </Panel>
+              <Panel
+                title="Portfolio"
+                subtitle={
+                  portfolioScope === "all"
+                    ? "Every token you hold, across all networks"
+                    : "Every token you hold on the active network"
+                }
+              >
+                {/* Scope toggle: current chain vs. all networks. */}
+                <div className="mb-4 grid grid-cols-2 gap-2 rounded-xl border border-border bg-background/40 p-1">
+                  {(["all", "current"] as const).map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => setPortfolioScope(s)}
+                      className={[
+                        "rounded-lg px-3 py-2 text-sm font-semibold transition-colors",
+                        portfolioScope === s
+                          ? "bg-accent/20 text-white ring-1 ring-accent/40"
+                          : "text-white/50 hover:text-white",
+                      ].join(" ")}
+                    >
+                      {s === "all" ? "All networks" : "This network"}
+                    </button>
+                  ))}
+                </div>
+                {portfolioScope === "all" ? (
+                  <AllNetworksPortfolio />
+                ) : (
+                  <Portfolio />
+                )}
+              </Panel>
+            </div>
+          ) : active === "send" ? (
+            <Panel
+              title="Send"
+              subtitle="Send any token — native coin or ERC-20"
+            >
+              <SendToken />
+            </Panel>
+          ) : active === "receive" ? (
+            <Panel
+              title="Receive"
+              subtitle="Share your address to receive any token"
+            >
+              <ReceiveToken />
+            </Panel>
+          ) : active === "networks" ? (
+            <Panel
+              title="Networks"
+              subtitle="Switch the active chain in your wallet"
+            >
+              <NetworkSwitcher />
+            </Panel>
+          ) : (
+            <Panel
+              title="Token Balance Checker"
+              subtitle="Look up balances for any address"
+            >
+              <TokenBalances />
+            </Panel>
+          )}
+
+          {/* Footer */}
+          <p className="mt-6 text-center text-xs text-white/30 md:text-left">
+            Built with Next.js · wagmi v2 · viem · RainbowKit
+          </p>
+        </div>
       </div>
     </main>
   );
